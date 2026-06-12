@@ -1,4 +1,4 @@
-name: OperaGX PC
+name: Cloud PC + Web Browser Link + Opera GX
 
 on:
   workflow_dispatch:
@@ -15,13 +15,13 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 190
     env:
-      ANYDESK_PASS: Pass@1234
+      VNC_PASS: Pass1234
       RUNTIME_MINUTES: 180
 
     steps:
       - name: Wipe Unnecessary Pre-Installed GitHub Apps & Shortcuts
         run: |
-          Write-Host "Purging pre-installed desktop icons and non-essential software..."
+          Write-Host "Purging pre-installed desktop icons..."
           $publicDesktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
           $userDesktop = "$env:USERPROFILE\Desktop"
           
@@ -31,51 +31,21 @@ jobs:
               if (Test-Path "$userDesktop\$target") { Remove-Item "$userDesktop\$target" -Force -ErrorAction SilentlyContinue }
           }
 
-      - name: Download and Force Install AnyDesk
+      - name: Force Full HD Screen Resolution Calibration
         run: |
-          $url = "https://download.anydesk.com/AnyDesk.exe"
-          $dst = "$env:TEMP\AnyDesk.exe"
-          Invoke-WebRequest -Uri $url -OutFile $dst
-          
-          $installDir = "C:\Program Files (x86)\AnyDesk"
-          if (-not (Test-Path $installDir)) { New-Item -ItemType Directory -Path $installDir -Force | Out-Null }
-
-          Start-Process $dst -ArgumentList "--install `"$installDir`"", "--silent", "--start-with-win" -Wait
-          Start-Sleep -Seconds 5
-          Remove-Item $dst -ErrorAction SilentlyContinue
-
-      - name: Configure Unattended Access Password & Force Enable Touch Injection
-        run: |
-          $ad = "C:\Program Files (x86)\AnyDesk\AnyDesk.exe"
-          if (-not (Test-Path $ad)) { $ad = "C:\Program Files\AnyDesk\AnyDesk.exe" }
-          
-          cmd.exe /c "echo ${{ env.ANYDESK_PASS }} | `"$ad`" --set-password"
-          
-          # Force Windows to allow UI Automation and Touch Injection over RDP layers
-          New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableUIADesktopToggle" -PropertyType DWord -Value 1 -Force -ErrorAction SilentlyContinue
-          
-          # Unblock Touch Remote/Tablet Mode restrictions in Remote Desktop Services
-          $tsPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations"
-          New-ItemProperty -Path $tsPath -Name "TouchMode" -PropertyType DWord -Value 1 -Force -ErrorAction SilentlyContinue
-          New-ItemProperty -Path $tsPath -Name "EnableTouchInjection" -PropertyType DWord -Value 1 -Force -ErrorAction SilentlyContinue
-          
-          $path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
-          Set-ItemProperty -Path $path -Name "TaskbarGlomLevel" -Value 0 -ErrorAction SilentlyContinue
-          
-          Start-Process -FilePath $ad -ArgumentList "--restart-service" -Wait
-          Start-Sleep -Seconds 5
-
-      - name: Minimize Running Infrastructure Windows
-        run: |
-          Write-Host "Sending active command prompt windows to the taskbar tray..."
-          $shell = New-Object -ComObject Shell.Application
-          $shell.MinimizeAll()
-
-      - name: Optimize Resolution for Mobile Display
-        run: |
-          Write-Host "Forcing resolution calibration matrix to Maximum Display Canvas..."
-          # Upgraded from 1280x720 to 1920x1080 to prevent remote mobile scrolling layers
+          Write-Host "Forcing display matrix canvas to 1920x1080..."
           Set-DisplayResolution -Width 1920 -Height 1080 -Force -ErrorAction SilentlyContinue
+
+      - name: Install and Configure TightVNC Server
+        run: |
+          Write-Host "Downloading TightVNC backend..."
+          $url = "https://www.tightvnc.com/download/2.8.84/tightvnc-2.8.84-gpl-setup-64bit.msi"
+          $msi = "$env:TEMP\tightvnc.msi"
+          Invoke-WebRequest -Uri $url -OutFile $msi
+          
+          Write-Host "Installing silently..."
+          Start-Process msiexec.exe -ArgumentList "/i `"$msi`"", "/quiet", "/qn", "SERVER_REGISTER_AS_SERVICE=1", "SET_PASSWORD=1", "VALUE_PASSWORD=${{ env.VNC_PASS }}", "SET_VIEWONLY_PASSWORD=1", "VALUE_VIEWONLY_PASSWORD=${{ env.VNC_PASS }}" -Wait
+          Start-Sleep -Seconds 5
 
       - name: Download & Force Consumer Build of Opera GX
         run: |
@@ -93,7 +63,6 @@ jobs:
               Move-Item -Path "$userDesktop\Opera GX.lnk" -Destination $publicDesktop -Force -ErrorAction SilentlyContinue
           }
           
-          Write-Host "Configuring explicit launcher shortcut with forced promo link and sidebar flags..."
           $operaExe = "$env:ProgramFiles\Opera GX\opera.exe"
           if (-not (Test-Path $operaExe)) { $operaExe = "$env:ProgramFiles (x86)\Opera GX\opera.exe" }
           
@@ -103,21 +72,37 @@ jobs:
           $Shortcut.Arguments = "https://www.opera.com/gx/forsaken --no-first-run --enable-features=GXRewards,GXRewardsSidebarItem --with-feature:gx-rewards=1"
           $Shortcut.Save()
 
-      - name: Fetch and Display AnyDesk Connection Address
+      - name: Deploy noVNC Web Client Bridge & Ngrok Tunnel
         run: |
-          $confPath = "C:\ProgramData\AnyDesk\system.conf"
-          $cleanId = ""
+          Write-Host "Downloading Node web-bridge utilities..."
+          npm install -g websockify --silent 2>$null
           
-          for ($i = 1; $i -le 10; $i++) {
-              if (Test-Path $confPath) {
-                  $content = Get-Content $confPath -Raw
-                  if ($content -match 'ad\.anynet\.id=(\d+)') {
-                      $cleanId = $Matches[1]
-                      break
-                  }
-              }
-              Start-Sleep -Seconds 4
-          }
+          # Download noVNC standalone files
+          New-Item -ItemType Directory -Path "C:\noVNC" -Force | Out-Null
+          Invoke-WebRequest -Uri "https://github.com/novnc/noVNC/archive/refs/tags/v1.5.0.zip" -OutFile "novnc.zip"
+          Expand-Archive -Path "novnc.zip" -DestinationPath "C:\noVNC" -Force
+          Copy-Item -Path "C:\noVNC\noVNC-1.5.0\*" -Destination "C:\noVNC" -Recurse -Force
+          
+          Write-Host "Downloading core network proxy pipeline (Ngrok)..."
+          Invoke-WebRequest -Uri "https://bin.equinox.io/c/b34199vj6ks/ngrok-stable-windows-amd64.zip" -OutFile "ngrok.zip"
+          Expand-Archive -Path "ngrok.zip" -DestinationPath "." -Force
+          Remove-Item "ngrok.zip" -ErrorAction SilentlyContinue
+
+      - name: Start Web Services & Expose Link
+        run: |
+          Write-Host "Bridging VNC to Web Ports..."
+          # Maps VNC traffic (5900) to a web-accessible websocket port (8080)
+          Start-Process websockify -ArgumentList "8080 localhost:5900 --web C:\noVNC"
+          Start-Sleep -Seconds 3
+          
+          Write-Host "Creating Public HTTP Web Proxy..."
+          Start-Process .\ngrok.exe -ArgumentList "http 8080"
+          Start-Sleep -Seconds 7
+          
+          $NgrokApi = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels"
+          $PublicUrl = $NgrokApi.tunnels[0].public_url
+          # Append the default entry point file for noVNC
+          $WebLink = "$PublicUrl/vnc.html"
           
           $ESC = [char]27
           $Green = "$ESC[32m"
@@ -126,10 +111,11 @@ jobs:
           $Reset = "$ESC[0m"
           
           Write-Host "${Green}====================================================${Reset}"
-          Write-Host "${Green}        ANYDESK CLOUD MACHINE IS READY TO CONNECT     ${Reset}"
+          Write-Host "${Green}      WEB-BROWSER CLOUD PC IS READY TO CONNECT       ${Reset}"
           Write-Host "${Green}====================================================${Reset}"
-          Write-Host "${Yellow} CONNECTION ID : ${Red}${cleanId}${Reset}"
-          Write-Host "${Yellow} PASSWORD      : ${Red}${{ env.ANYDESK_PASS }}${Reset}"
+          Write-Host "${Yellow} CLICK TO OPEN IN PHONE WEB BROWSER: ${Reset}"
+          Write-Host "${Red}${WebLink}${Reset}"
+          Write-Host "${Yellow} ACCESS PASSWORD : ${Red}${{ env.VNC_PASS }}${Reset}"
           Write-Host "${Green}====================================================${Reset}"
 
       - name: Keep alive
