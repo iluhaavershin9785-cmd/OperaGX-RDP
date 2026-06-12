@@ -1,4 +1,4 @@
-name: Cloud PC + AweSun + Opera GX (Winget Engine Layout)
+name: Cloud PC + AweSun + Opera GX (Direct Executable Layout)
 
 on:
   workflow_dispatch:
@@ -31,14 +31,21 @@ jobs:
               if (Test-Path "$userDesktop\$target") { Remove-Item "$userDesktop\$target" -Force -ErrorAction SilentlyContinue }
           }
 
-      - name: Download and Force Install AweSun Global Client (Winget Fix)
+      - name: Download and Force Install AweSun Global Client (Direct Binary Fix)
         run: |
-          Write-Host "Invoking Windows Package Manager to pull verified deployment binaries..."
-          # winget bypasses unreadable HTTP streams and directly unpacks the verified architecture build
-          winget install --id Aweray.AweSun --silent --accept-package-agreements --accept-source-agreements
+          Write-Host "Fetching direct AweSun standalone binary map..."
+          # This is the raw, static binary download server path to prevent redirection HTML corruption
+          $url = "https://client-download.aweray.com/win/AweSun_Client_Setup.exe"
+          $dst = "$env:TEMP\AweSunSetup.exe"
           
-          Write-Host "Allowing background systems to synchronize service objects..."
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          Invoke-WebRequest -Uri $url -OutFile $dst -UserAgent "Mozilla/5.0"
+          
+          Write-Host "Executing silent compilation sequence..."
+          # Installs cleanly via command arguments to avoid GUI blocking
+          Start-Process $dst -ArgumentList "/S" -Wait
           Start-Sleep -Seconds 10
+          Remove-Item $dst -ErrorAction SilentlyContinue
 
       - name: Configure Unattended Security Password & Unblock Global Routing
         run: |
@@ -46,18 +53,18 @@ jobs:
           $aweExe = "C:\Program Files (x86)\AweSun\AweSun.exe"
           if (-not (Test-Path $aweExe)) { $aweExe = "C:\Program Files\AweSun\AweSun.exe" }
           
-          # Forces local loopback nodes to strip geographic alignment locks
+          # Strips regional routing isolation from the runner
           $regPath = "HKLM:\SOFTWARE\AweSun"
           if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
           New-ItemProperty -Path $regPath -Name "EnableGlobalNodes" -PropertyType DWord -Value 1 -Force -ErrorAction SilentlyContinue
           New-ItemProperty -Path $regPath -Name "DirectConnectMode" -PropertyType DWord -Value 1 -Force -ErrorAction SilentlyContinue
           
-          # Force apply the unattended string directly through the system service pipe
+          # Injects security connection keys directly into the execution instance
           if (Test-Path $aweExe) {
               Start-Process -FilePath $aweExe -ArgumentList "--set-password=`"${{ env.AWESUN_PASS }}`"", "--silent" -Wait
           }
           
-          # Unlocks touch gesture integration through structural Windows API layers
+          # Allow touch injection over cloud session layers
           New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableUIADesktopToggle" -PropertyType DWord -Value 1 -Force -ErrorAction SilentlyContinue
           
           $path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
