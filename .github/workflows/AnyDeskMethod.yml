@@ -1,4 +1,4 @@
-name: Cloud PC + AnyDesk + Opera GX (Absolute Control Layout)
+name: Cloud PC + AnyDesk + Opera GX (Forced Minimize Fix)
 
 on:
   workflow_dispatch:
@@ -59,12 +59,10 @@ jobs:
 
       - name: Clean and Hide Active Infrastructure Windows
         run: |
-          Write-Host "Masking operational console background natively..."
-          # SW_HIDE (0) removes the host window structure entirely from sight to prevent manual interactions
-          $typeDefinition = '[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow); [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();'
-          $win32 = Add-Type -MemberDefinition $typeDefinition -Name "Win32Utils" -Namespace "Win32" -PassThru
-          $handle = $win32::GetConsoleWindow()
-          if ($handle -ne [IntPtr]::Zero) { $win32::ShowWindow($handle, 0) | Out-Null }
+          Write-Host "Minimizing background console layer..."
+          # This alternative method safely minimizes the active terminal session without breaking the active runner handle
+          $shell = New-Object -ComObject Shell.Application
+          $shell.MinimizeAll()
 
       - name: Optimize Resolution for Mobile Display
         run: |
@@ -79,7 +77,6 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile $installer
           
           Write-Host "Installing Opera GX with absolute silent defaults..."
-          # Passing explicit configuration preferences to the underlying installer package
           Start-Process -FilePath $installer -ArgumentList "--silent=1", "--allusers=1", "--launchbrowser=0", "--desktopshortcut=0", "--no-first-run" -Wait
           Start-Sleep -Seconds 5
           Remove-Item $installer -ErrorAction SilentlyContinue
@@ -90,11 +87,9 @@ jobs:
           $publicDesktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
           $userDesktop = "$env:USERPROFILE\Desktop"
           
-          # Clean up any generic icons drop by the installer inside user space or public space
           Get-ChildItem -Path $publicDesktop, $userDesktop -Filter "*Opera*.lnk" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
           Write-Host "Locating operational browser binary execution path..."
-          # Explicit check loop prioritizing the global directory target path over local user targets
           $operaExe = "C:\Program Files\Opera GX\opera.exe"
           if (-not (Test-Path $operaExe)) { $operaExe = "C:\Program Files (x86)\Opera GX\opera.exe" }
           if (-not (Test-Path $operaExe)) { $operaExe = "$env:LOCALAPPDATA\Programs\Opera GX\opera.exe" }
@@ -103,7 +98,6 @@ jobs:
           $WshShell = New-Object -ComObject WScript.Shell
           $Shortcut = $WshShell.CreateShortcut("$publicDesktop\Opera GX.lnk")
           $Shortcut.TargetPath = $operaExe
-          # Pass explicit parameters to launch directly to your partner page
           $Shortcut.Arguments = "https://www.opera.com/gx/forsaken --no-first-run"
           $Shortcut.Save()
           Write-Host "Shortcut generated successfully."
