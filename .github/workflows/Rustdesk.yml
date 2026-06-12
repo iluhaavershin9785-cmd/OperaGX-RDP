@@ -1,4 +1,4 @@
-name: Cloud PC + RustDesk + Opera GX (Service ID Fix)
+name: Cloud PC + RustDesk + Opera GX (Registry ID Extraction)
 
 on:
   workflow_dispatch:
@@ -98,31 +98,30 @@ jobs:
 
       - name: Fetch and Display RustDesk Connection Credentials
         run: |
-          Write-Host "Querying RustDesk core system for local terminal ID..."
-          $rdExe = "C:\Program Files\RustDesk\rustdesk.exe"
-          $systemCfgPath = "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk\config\RustDesk.toml"
+          Write-Host "Scanning Windows Registry for RustDesk identity maps..."
           $deviceId = "Not Found"
           
-          # Check all system channels for the generated ID
+          # Direct query to the service configuration parameters inside the Windows registry hive
           for ($i = 1; $i -le 10; $i++) {
-              if (Test-Path $rdExe) {
-                  # Method 1: Query the service directly via CLI mapping
-                  $rawId = Start-Process -FilePath $rdExe -ArgumentList "--get-id" -NoNewWindow -PassThru -RedirectStandardOutput "$env:TEMP\id.txt" -Wait
-                  if (Test-Path "$env:TEMP\id.txt") {
-                      $idText = Get-Content "$env:TEMP\id.txt" -Raw
-                      if ($idText -match '(\d+)') {
-                          $deviceId = $Matches[1].Trim()
-                          break
-                      }
+              $regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\RustDesk\Parameters"
+              if (Test-Path $regPath) {
+                  $regVal = Get-ItemProperty -Path $regPath -Name "id" -ErrorAction SilentlyContinue
+                  if ($regVal -and $regVal.id -match '(\d+)') {
+                      $deviceId = $regVal.id
+                      break
                   }
               }
               
-              # Method 2: Fallback parse of the System Account configuration structure
-              if (Test-Path $systemCfgPath) {
-                  $content = Get-Content $systemCfgPath -Raw
-                  if ($content -match 'id\s*=\s*''(\d+)''') {
-                      $deviceId = $Matches[1]
-                      break
+              # Alternative deep scan across System-level application configuration text maps
+              $searchFolder = "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk"
+              if (Test-Path $searchFolder) {
+                  $file = Get-ChildItem -Path $searchFolder -Filter "RustDesk.toml" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+                  if ($file) {
+                      $content = Get-Content $file.FullName -Raw
+                      if ($content -match 'id\s*=\s*''(\d+)''') {
+                          $deviceId = $Matches[1]
+                          break
+                      }
                   }
               }
               Start-Sleep -Seconds 3
