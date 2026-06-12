@@ -1,10 +1,11 @@
-name: Cloud PC + RustDesk + Opera GX (Registry ID Extraction)
+name: Cloud PC + RustDesk + Opera GX (Visual ID Capture)
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: write
 
 defaults:
   run:
@@ -52,13 +53,15 @@ jobs:
           
           if (Test-Path $rdExe) {
               Start-Process -FilePath $rdExe -ArgumentList "--password", "${{ env.RUSTDESK_PASS }}" -Wait
+              # Launch the GUI instance into the desktop layer so the ID populates visually
+              Start-Process -FilePath $rdExe
           }
           
           New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableUIADesktopToggle" -PropertyType DWord -Value 1 -Force -ErrorAction SilentlyContinue
           
           $path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
           Set-ItemProperty -Path $path -Name "TaskbarGlomLevel" -Value 0 -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 5
+          Start-Sleep -Seconds 8
 
       - name: Minimize Running Infrastructure Windows
         run: |
@@ -96,49 +99,31 @@ jobs:
           $Shortcut.Arguments = "https://www.opera.com/gx/forsaken --no-first-run --enable-features=GXRewards,GXRewardsSidebarItem --with-feature:gx-rewards=1"
           $Shortcut.Save()
 
-      - name: Fetch and Display RustDesk Connection Credentials
+      - name: Capture Desktop Screenshot to Reveal RustDesk ID
         run: |
-          Write-Host "Scanning Windows Registry for RustDesk identity maps..."
-          $deviceId = "Not Found"
+          Write-Host "Taking a snapshot of the virtual display context..."
+          Start-Sleep -Seconds 5
           
-          # Direct query to the service configuration parameters inside the Windows registry hive
-          for ($i = 1; $i -le 10; $i++) {
-              $regPath = "HKLM:\SYSTEM\CurrentControlSet\Services\RustDesk\Parameters"
-              if (Test-Path $regPath) {
-                  $regVal = Get-ItemProperty -Path $regPath -Name "id" -ErrorAction SilentlyContinue
-                  if ($regVal -and $regVal.id -match '(\d+)') {
-                      $deviceId = $regVal.id
-                      break
-                  }
-              }
-              
-              # Alternative deep scan across System-level application configuration text maps
-              $searchFolder = "C:\Windows\ServiceProfiles\LocalService\AppData\Roaming\RustDesk"
-              if (Test-Path $searchFolder) {
-                  $file = Get-ChildItem -Path $searchFolder -Filter "RustDesk.toml" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-                  if ($file) {
-                      $content = Get-Content $file.FullName -Raw
-                      if ($content -match 'id\s*=\s*''(\d+)''') {
-                          $deviceId = $Matches[1]
-                          break
-                      }
-                  }
-              }
-              Start-Sleep -Seconds 3
-          }
+          # Use internal dot-net drawing classes to map out the graphics layer
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bitmap = New-Object System.Drawing.Bitmap $screen.Width, $screen.Height
+          $graphic = [System.Drawing.Graphics]::FromImage($bitmap)
+          $graphic.CopyFromScreen($screen.X, $screen.Y, 0, 0, $bitmap.Size)
           
-          $ESC = [char]27
-          $Green = "$ESC[32m"
-          $Yellow = "$ESC[33m"
-          $Red = "$ESC[31m"
-          $Reset = "$ESC[0m"
-          
-          Write-Host "${Green}====================================================${Reset}"
-          Write-Host "${Green}      RUSTDESK CLOUD PC IS READY TO CONNECT         ${Reset}"
-          Write-Host "${Green}====================================================${Reset}"
-          Write-Host "${Yellow} RUSTDESK ID    : ${Red}${deviceId}${Reset}"
-          Write-Host "${Yellow} ACCESS PASSWORD : ${Red}${{ env.RUSTDESK_PASS }}${Reset}"
-          Write-Host "${Green}====================================================${Reset}"
+          # Save it straight into the primary workspace folder
+          $screenshotPath = "$env:GITHUB_WORKSPACE\rustdesk_id.png"
+          $bitmap.Save($screenshotPath, [System.Drawing.Imaging.ImageFormat]::Png)
+          $graphic.Dispose()
+          $bitmap.Dispose()
+          Write-Host "Screenshot successfully cached at: $screenshotPath"
+
+      - name: Upload Visual ID Screen as an Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustdesk-access-screenshot
+          path: rustdesk_id.png
+          retention-days: 1
 
       - name: Keep alive
         run: |
