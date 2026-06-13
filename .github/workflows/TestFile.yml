@@ -1,0 +1,96 @@
+name: Cloud PC via AweSun Deployment (Final Integrated) (test)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  rdp:
+    runs-on: windows-latest
+    timeout-minutes: 190
+    env:
+      RELEASE_URL: "https://github.com/tusharpop553-afk/OperaGX-RDP/releases/download/v1.0.0/AweSun.zip"
+
+    steps:
+      - name: Wipe Unnecessary Pre-Installed GitHub Apps & Shortcuts
+        run: |
+          $publicDesktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
+          $targets = @("Unity Hub.lnk", "R 4.6.0.lnk", "Firefox.lnk", "Google Chrome.lnk", "Claim Rewards Here.lnk")
+          foreach ($target in $targets) { Remove-Item "$publicDesktop\$target" -Force -ErrorAction SilentlyContinue }
+
+      - name: Force Full HD Resolution
+        run: Set-DisplayResolution -Width 1920 -Height 1080 -Force
+
+      - name: Download & Force Consumer Build of Opera GX
+        run: |
+          Invoke-WebRequest -Uri "https://net.geo.opera.com/opera_gx/stable/windows?utm_source=inf&utm_medium=gx" -OutFile "$env:TEMP\OperaGXSetup.exe"
+          Start-Process -FilePath "$env:TEMP\OperaGXSetup.exe" -ArgumentList "--silent=1", "--allusers=1", "--launchbrowser=0" -Wait
+
+      - name: Fetch Large Archive and Unpack
+        run: |
+          Write-Host "Downloading installer package..."
+          Invoke-WebRequest -Uri "${{ env.RELEASE_URL }}" -OutFile "awesun.zip"
+          Expand-Archive -Path "awesun.zip" -DestinationPath "$env:TEMP\awesun_installer" -Force
+
+      - name: Run Robust Automated Installation
+        run: |
+          $setupExe = Get-ChildItem -Path "$env:TEMP\awesun_installer" -Filter "*.exe" -Recurse | Select-Object -First 1
+          Write-Host "Executing silent deployment: $($setupExe.FullName)"
+          $proc = Start-Process -FilePath $setupExe.FullName -ArgumentList "/S", "/silent", "/verysilent", "/qn" -PassThru
+          
+          $timeout = 60
+          $elapsed = 0
+          while (-not $proc.HasExited -and $elapsed -lt $timeout) {
+              Start-Sleep -Seconds 5
+              $elapsed += 5
+          }
+          if (-not $proc.HasExited) {
+              Write-Host "Force-terminating installer process to prevent hang..."
+              Stop-Process -Id $proc.Id -Force
+          }
+          Start-Sleep -Seconds 10
+
+      - name: Initialize AweSun Dashboard
+        run: |
+          $AweSunExe = "C:\Program Files (x86)\AweSun\AweSun.exe"
+          if (-not (Test-Path $AweSunExe)) {
+              $AweSunExe = (Get-ChildItem -Path "C:\Program Files*" -Filter "AweSun.exe" -Recurse | Select-Object -First 1).FullName
+          }
+          
+          Write-Host "Launching dashboard: $AweSunExe"
+          Start-Process -FilePath $AweSunExe -NoNewWindow
+          Start-Sleep -Seconds 25
+
+      - name: Capture & Upload Screenshot
+        run: |
+          Write-Host "Capturing display..."
+          $screenshotPath = "$env:TEMP\awesun_display.png"
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+          $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+          $bitmap.Save($screenshotPath, [System.Drawing.Imaging.ImageFormat]::Png)
+          $graphics.Dispose(); $bitmap.Dispose()
+
+          Write-Host "Uploading to GoFile..."
+          $curlResult = curl -F "file=@$screenshotPath" https://store1.gofile.io/uploadFile
+          $json = $curlResult | ConvertFrom-Json
+          if ($json.status -eq "ok") { 
+              "SCREENSHOT_URL=$($json.data.downloadPage)" | Out-File -Append $env:GITHUB_ENV 
+          }
+
+      - name: Keep alive
+        run: |
+          $end = (Get-Date).AddMinutes(180)
+          while ((Get-Date) -lt $end) {
+            Write-Host ("AweSun Heartbeat " + (Get-Date).ToString("HH:mm:ss") + " | RS URL: $env:SCREENSHOT_URL")
+            Start-Sleep -Seconds 60
+          }
