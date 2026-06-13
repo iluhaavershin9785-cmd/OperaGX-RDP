@@ -100,7 +100,7 @@ jobs:
           Start-Process "$publicDesktop\Opera GX Browser.lnk"
           Start-Sleep -Seconds 4
 
-      - name: Install Ngrok, Establish Tunnel & Fetch Connection Endpoint
+      - name: Initialize Network Tunnel & Scrape Output Matrix
         run: |
           Write-Host "Installing network tunnel routing engine..."
           choco install ngrok --yes
@@ -109,12 +109,11 @@ jobs:
           Write-Host "Authenticating tunnel framework..."
           ngrok config add-authtoken "${{ inputs.ngrok_token }}"
           
-          Write-Host "Spawning background port forward tunnel over RDP port 3389..."
-          # Fix: Explicitly passing arguments as an array keeps the process detached and active
-          $NgrokArgs = @("tcp", "3389", "--log=stdout")
-          Start-Process -FilePath "ngrok" -ArgumentList $NgrokArgs -NoNewWindow -PassThru
+          Write-Host "Spawning asynchronous job thread over port 3389..."
+          # Fix: Using Start-Job keeps the process context decoupled from the step's block tracking
+          Start-Job -ScriptBlock { ngrok tcp 3389 --log=stdout }
           
-          Write-Host "Waiting for tunnel layer to stabilize..."
+          Write-Host "Waiting for external loop processing allocation..."
           Start-Sleep -Seconds 15
           
           Write-Host "Querying secure endpoint matrix..."
