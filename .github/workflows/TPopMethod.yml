@@ -1,4 +1,4 @@
-name: Cloud PC + Web Browser Link + Opera GX (Multi-User Safe)
+name: Cloud PC + Web Browser Link + Opera GX (Final Verified Complete)
 
 on:
   workflow_dispatch:
@@ -32,6 +32,16 @@ jobs:
         run: |
           Invoke-WebRequest -Uri "https://www.tightvnc.com/download/2.8.84/tightvnc-2.8.84-gpl-setup-64bit.msi" -OutFile "$env:TEMP\tightvnc.msi"
           Start-Process msiexec.exe -ArgumentList "/i `"$env:TEMP\tightvnc.msi`" /quiet /qn SERVER_REGISTER_AS_SERVICE=1 SET_PASSWORD=1 VALUE_PASSWORD=${{ env.VNC_PASS }} SET_VIEWONLY_PASSWORD=1 VALUE_VIEWONLY_PASSWORD=${{ env.VNC_PASS }}" -Wait
+          
+          # Core Fix: Inject explicit system profile adjustments to force VNC loopback approval
+          Start-Sleep -Seconds 3
+          $vncPath = "HKLM:\SOFTWARE\TightVNC\Server"
+          if (Test-Path $vncPath) {
+              Set-ItemProperty -Path $vncPath -Name "AllowLoopback" -Value 1 -Type DWord
+              Set-ItemProperty -Path $vncPath -Name "AcceptLocalConnections" -Value 1 -Type DWord
+          }
+          # Restart the service to apply loopback permissions instantly
+          Restart-Service -Name "TightVNC Server" -Force
 
       - name: Download & Force Consumer Build of Opera GX
         run: |
@@ -40,12 +50,8 @@ jobs:
 
       - name: Deploy Web Interface & Dynamic Gateway Engines
         run: |
-          # Install Python websockify for backend stability
           pip install websockify --quiet
-          
-          # Install localtunnel globally via npm to handle dynamic edge URLs safely
           npm install -g localtunnel --silent
-          
           New-Item -ItemType Directory -Path "C:\noVNC" -Force
           Invoke-WebRequest -Uri "https://github.com/novnc/noVNC/archive/refs/tags/v1.5.0.zip" -OutFile "novnc.zip"
           Expand-Archive -Path "novnc.zip" -DestinationPath "C:\noVNC" -Force
@@ -66,11 +72,9 @@ jobs:
           Write-Host "Requesting isolated, non-clashing edge domain map..."
           $LogFile = "$env:TEMP\localtunnel.log"
           
-          # Call localtunnel explicitly to map port 8080
           Start-Process cmd.exe -ArgumentList "/c lt --port 8080 > `"$LogFile`""
           Start-Sleep -Seconds 7
           
-          # Extract the cleanly propagated unique URL
           $RawLink = (Get-Content $LogFile -Raw) | Select-String -Pattern 'https://[a-zA-Z0-9-]+\.loca\.lt' | Select-Object -ExpandProperty Matches | Select-Object -ExpandProperty Value -First 1
           
           if ($RawLink) {
