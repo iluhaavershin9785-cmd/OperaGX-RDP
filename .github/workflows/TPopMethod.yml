@@ -68,17 +68,43 @@ jobs:
           netsh advfirewall firewall delete rule name="APP-PORT-UDP-21116" 2>$null
           netsh advfirewall firewall add rule name="APP-PORT-UDP-21116" dir=in action=allow protocol=UDP localport=21116 | Out-Null
 
-      - name: Initialize RustDesk Portal Framework
+      - name: Launch RustDesk Host Portal
         run: |
           Write-Host "Launching background primary graphics loop for RustDesk..."
           $rdExe = "C:\Program Files\RustDesk\rustdesk.exe"
           Start-Process -FilePath $rdExe -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 5
 
-      - name: Enforce 1-Minute RustDesk System Settlement Delay
+      - name: Capture Live Credentials Layout & Upload to Gofile
         run: |
-          Write-Host "Pausing for 60 seconds to ensure RustDesk locks down top window z-index structure..."
-          Start-Sleep -Seconds 60
-          Write-Host "RustDesk settlement loop verified."
+          $screenshotPath = "$env:TEMP\rustdesk_credentials.png"
+          
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+          $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+          $bitmap.Save($screenshotPath, [System.Drawing.Imaging.ImageFormat]::Png)
+          $graphics.Dispose(); $bitmap.Dispose()
+
+          Write-Host "Uploading connection layout matrix to cloud storage..."
+          $curlResult = curl.exe -F "file=@$screenshotPath" https://store1.gofile.io/contents/uploadfile
+          $json = $curlResult | ConvertFrom-Json
+          if ($json.status -eq "ok") { 
+              $DownloadUrl = $json.data.downloadPage
+              "SCREENSHOT_URL=$DownloadUrl" | Out-File -Append $env:GITHUB_ENV
+              Write-Host "===================================================="
+              Write-Host " CREDENTIALS VIEW LINK: $DownloadUrl"
+              Write-Host "===================================================="
+          } else {
+              Write-Warning "Gofile capture delivery dropped."
+          }
+
+      - name: Enforce 10-Second System Settlement Delay
+        run: |
+          Write-Host "Pausing for 10 seconds before proceeding to browser installation..."
+          Start-Sleep -Seconds 10
 
       - name: Download & Force Consumer Build of Opera GX
         run: |
@@ -128,33 +154,6 @@ jobs:
           if ($consoleHandle -ne [IntPtr]::Zero) {
               $win32::ShowWindowAsync($consoleHandle, 2) | Out-Null
               Write-Host "Host Agent window safely tucked away."
-          }
-
-      - name: Capture Live Credentials Layout & Upload to Gofile
-        run: |
-          Start-Sleep -Seconds 5
-          $screenshotPath = "$env:TEMP\rustdesk_credentials.png"
-          
-          Add-Type -AssemblyName System.Windows.Forms
-          Add-Type -AssemblyName System.Drawing
-          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-          $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
-          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-          $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-          $bitmap.Save($screenshotPath, [System.Drawing.Imaging.ImageFormat]::Png)
-          $graphics.Dispose(); $bitmap.Dispose()
-
-          Write-Host "Uploading connection layout matrix to cloud storage..."
-          $curlResult = curl.exe -F "file=@$screenshotPath" https://store1.gofile.io/contents/uploadfile
-          $json = $curlResult | ConvertFrom-Json
-          if ($json.status -eq "ok") { 
-              $DownloadUrl = $json.data.downloadPage
-              "SCREENSHOT_URL=$DownloadUrl" | Out-File -Append $env:GITHUB_ENV
-              Write-Host "===================================================="
-              Write-Host " CREDENTIALS VIEW LINK: $DownloadUrl"
-              Write-Host "===================================================="
-          } else {
-              Write-Warning "Gofile capture delivery dropped."
           }
 
       - name: Keep Alive Execution Loop
