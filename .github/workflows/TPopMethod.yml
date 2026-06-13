@@ -1,7 +1,12 @@
-name: Cloud PC + Web Browser Link + Opera GX (Stable Legacy Engine)
+name: Cloud PC + RustDesk + Opera GX (Ultimate Mobile Controls)
 
 on:
   workflow_dispatch:
+    inputs:
+      runtime_minutes:
+        description: "Runtime in minutes (max 360)"
+        required: false
+        default: "355"
 
 permissions:
   contents: read
@@ -11,12 +16,12 @@ defaults:
     shell: pwsh
 
 jobs:
-  rdp:
+  desktop:
     runs-on: windows-latest
-    timeout-minutes: 190
+    timeout-minutes: 370
     env:
-      VNC_PASS: password
-      RUNTIME_MINUTES: 180
+      RDP_USER: user
+      RDP_PASS: Pass1234
 
     steps:
       - name: Wipe Unnecessary Pre-Installed GitHub Apps & Shortcuts
@@ -26,70 +31,120 @@ jobs:
           foreach ($target in $targets) { Remove-Item "$publicDesktop\$target" -Force -ErrorAction SilentlyContinue }
 
       - name: Force Full HD Resolution
-        run: Set-DisplayResolution -Width 1920 -Height 1080 -Force
-
-      - name: Install and Initialize Legacy TightVNC Engine
         run: |
-          # Download stable standalone binary bundle
-          Invoke-WebRequest -Uri "https://www.tightvnc.com/download/1.3.10/tightvnc-1.3.10_x86_development.zip" -OutFile "legacy_vnc.zip"
-          Expand-Archive -Path "legacy_vnc.zip" -DestinationPath "C:\TightVNC" -Force
-          
-          # Manually construct the standard configuration tree structure 
-          $RegPath = "HKCU:\Software\ORL\WinVNC3"
-          if (-not (Test-Path $RegPath)) { New-Item -Path "HKCU:\Software\ORL" -Name "WinVNC3" -Force }
-          
-          # Inject the static 8-byte obfuscated key for the word "password"
-          [byte[]]$passHex = 0x2c, 0x7e, 0xe2, 0xbc, 0x7e, 0x2c, 0x22, 0x9e
-          Set-ItemProperty -Path $RegPath -Name "Password" -Value $passHex -Type Binary
-          
-          # Spin up the background desktop capture host loop
-          Start-Process "C:\TightVNC\tightvnc-1.3.10_x86_development\WinVNC.exe" -ArgumentList "-run"
-          Write-Host "Legacy Capture Host Online."
+          Set-DisplayResolution -Width 1920 -Height 1080 -Force
+          "RUNTIME_MINUTES=${{ inputs.runtime_minutes }}" | Out-File -Append $env:GITHUB_ENV
 
       - name: Download & Force Consumer Build of Opera GX
         run: |
           Invoke-WebRequest -Uri "https://net.geo.opera.com/opera_gx/stable/windows?utm_source=inf&utm_medium=gx" -OutFile "$env:TEMP\OperaGXSetup.exe"
           Start-Process -FilePath "$env:TEMP\OperaGXSetup.exe" -ArgumentList "--silent=1", "--allusers=1", "--launchbrowser=0" -Wait
 
-      - name: Deploy Web Interface & Dynamic Gateway Engines
+      - name: Install Python libs for Screen Capture & Automation
         run: |
-          python -m pip install websockify --quiet --no-input --disable-pip-version-check --no-color --progress-bar off
-          npm install -g localtunnel --silent --no-fund --no-audit --non-interactive
-          
-          New-Item -ItemType Directory -Path "C:\noVNC" -Force
-          Invoke-WebRequest -Uri "https://github.com/novnc/noVNC/archive/refs/tags/v1.5.0.zip" -OutFile "novnc.zip"
-          Expand-Archive -Path "novnc.zip" -DestinationPath "C:\noVNC" -Force
-          Copy-Item -Path "C:\noVNC\noVNC-1.5.0\*" -Destination "C:\noVNC" -Recurse -Force
+          python -m pip install --upgrade pip --quiet
+          python -m pip install pyautogui pynput pillow --quiet
 
-      - name: Start Services & Generate Auto-Login URLs
+      - name: Run Opera GX Custom Automation Sequence
         run: |
-          Write-Host "Launching Native Python Web Bridge..."
-          Start-Process python -ArgumentList "-m websockify 8080 localhost:5900 --web C:\noVNC"
+          Start-Process "C:\Program Files\Opera GX\launcher.exe"
+          Start-Sleep -Seconds 8
           
-          # Verify port 8080 handshake
-          $retries = 0
-          while (-not (Test-NetConnection -ComputerName 127.0.0.1 -Port 8080).TcpTestSucceeded -and $retries -lt 15) {
-              Start-Sleep -Seconds 2
-              $retries++
+          python -c @"
+          import pyautogui
+          import time
+          
+          # Close the default welcome page tab (Ctrl + W)
+          pyautogui.hotkey('ctrl', 'w')
+          time.sleep(2)
+          
+          # Force launch the collab link setup
+          pyautogui.hotkey('ctrl', 't')
+          pyautogui.write('https://www.opera.com/gx/is-forsaken')
+          pyautogui.press('enter')
+          "@
+
+      - name: Install RustDesk Host Engine
+        run: |
+          $rdExe = "C:\Program Files\RustDesk\rustdesk.exe"
+          if (-not (Test-Path $rdExe)) {
+            $rdUrl = "https://github.com/rustdesk/rustdesk/releases/download/1.3.1/rustdesk-1.3.1-x86_64.msi"
+            $installerPath = "$env:TEMP\rustdesk.msi"
+            Invoke-WebRequest -Uri $rdUrl -OutFile $installerPath
+            Start-Process msiexec.exe -ArgumentList "/i","`"$installerPath`"","/quiet","/norestart" -Wait
+            Remove-Item $installerPath -Force
           }
+
+      - name: Set Custom RustDesk Static Password
+        run: |
+          & "C:\Program Files\RustDesk\rustdesk.exe" --password "${{ env.RDP_PASS }}"
+          Write-Host "RustDesk permanent security key set to: ${{ env.RDP_PASS }}"
+
+      - name: Open Firewall Rules for RustDesk Port Mapping
+        run: |
+          for ($p=21115; $p -le 21119; $p++) {
+            $name = "APP-PORT-TCP-$p"
+            netsh advfirewall firewall delete rule name=$name 2>$null
+            netsh advfirewall firewall add rule name=$name dir=in action=allow protocol=TCP localport=$p | Out-Null
+          }
+          netsh advfirewall firewall delete rule name="APP-PORT-UDP-21116" 2>$null
+          netsh advfirewall firewall add rule name="APP-PORT-UDP-21116" dir=in action=allow protocol=UDP localport=21116 | Out-Null
+
+      - name: Launch RustDesk UI & Hide Agent Host Console
+        run: |
+          # Fire up the main application window and keep it visible
+          $rdExe = "C:\Program Files\RustDesk\rustdesk.exe"
+          Start-Process -FilePath $rdExe -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 6
           
-          $LogFile = "$env:TEMP\localtunnel.log"
-          Start-Process cmd.exe -ArgumentList "/c lt --port 8080 > `"$LogFile`""
-          Start-Sleep -Seconds 7
+          # Use Win32 API to find and minimize the background Agent Host console window
+          $memberDef = @'
+          [DllImport("user32.dll")]
+          public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+          [DllImport("kernel32.dll")]
+          public static extern IntPtr GetConsoleWindow();
+          '@
+          $win32 = Add-Type -MemberDefinition $memberDef -Name "Win32Util" -Namespace "Win32" -PassThru
           
-          $RawLink = (Get-Content $LogFile -Raw) | Select-String -Pattern 'https://[a-zA-Z0-9-]+\.loca\.lt' | Select-Object -ExpandProperty Matches | Select-Object -ExpandProperty Value -First 1
+          # Fetch current console window handle and force minimize it (2 = SW_MINIMIZE)
+          $consoleHandle = $win32::GetConsoleWindow()
+          if ($consoleHandle -ne [IntPtr]::Zero) {
+              $win32::ShowWindowAsync($consoleHandle, 2) | Out-Null
+              Write-Host "GitHub Agent Host background console window hidden successfully."
+          }
+
+      - name: Capture Live Credentials Layout & Upload to Gofile
+        run: |
+          Start-Sleep -Seconds 5
+          $screenshotPath = "$env:TEMP\rustdesk_credentials.png"
           
-          if ($RawLink) {
-              $FinalUrl = $RawLink + "/vnc.html?autoconnect=true&password=" + "${{ env.VNC_PASS }}"
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+          $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+          $bitmap.Save($screenshotPath, [System.Drawing.Imaging.ImageFormat]::Png)
+          $graphics.Dispose(); $bitmap.Dispose()
+
+          Write-Host "Uploading connection layout matrix to cloud storage..."
+          $curlResult = curl.exe -F "file=@$screenshotPath" https://store1.gofile.io/contents/uploadfile
+          $json = $curlResult | ConvertFrom-Json
+          if ($json.status -eq "ok") { 
+              $DownloadUrl = $json.data.downloadPage
+              "SCREENSHOT_URL=$DownloadUrl" | Out-File -Append $env:GITHUB_ENV
               Write-Host "===================================================="
-              Write-Host "      WEB-BROWSER CLOUD PC IS READY TO CONNECT      "
-              Write-Host "===================================================="
-              Write-Host " CLICK LINK: $FinalUrl"
-              Write-Host " PASSWORD  : ${{ env.VNC_PASS }}"
+              Write-Host " CREDENTIALS VIEW LINK: $DownloadUrl"
               Write-Host "===================================================="
           } else {
-              Write-Error "CRITICAL: Dynamic gateway assignment timed out."
+              Write-Warning "Gofile capture delivery dropped."
           }
 
-      - name: Keep alive
-        run: Start-Sleep -Seconds 10000
+      - name: Keep Alive Execution Loop
+        run: |
+          $mins = [int]"${{ env.RUNTIME_MINUTES }}"
+          $end = (Get-Date).AddMinutes($mins)
+          while ((Get-Date) -lt $end) {
+            Write-Host "Cloud PC Heartbeat | Ends at: $($end.ToString('HH:mm:ss')) | View Screen at: $env:SCREENSHOT_URL"
+            Start-Sleep -Seconds 60
+          }
