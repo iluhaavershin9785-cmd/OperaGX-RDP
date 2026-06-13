@@ -1,4 +1,4 @@
-name: Cloud PC + Web Browser Link + Opera GX (Absolute Password Bypass)
+name: Cloud PC + Web Browser Link + Opera GX (Absolute Passwordless Setup)
 
 on:
   workflow_dispatch:
@@ -27,11 +27,23 @@ jobs:
       - name: Force Full HD Resolution
         run: Set-DisplayResolution -Width 1920 -Height 1080 -Force
 
-      - name: Deploy Isolated TightVNC Application Server
+      - name: Install and Configure TightVNC Server (No Password)
         run: |
           Invoke-WebRequest -Uri "https://www.tightvnc.com/download/2.8.84/tightvnc-2.8.84-gpl-setup-64bit.msi" -OutFile "$env:TEMP\tightvnc.msi"
-          # Install features without registering a rigid, password-locked service background daemon
-          Start-Process msiexec.exe -ArgumentList "/i `"$env:TEMP\tightvnc.msi`" /quiet /qn SERVER_REGISTER_AS_SERVICE=0" -Wait
+          # Install as a service so it runs correctly in headless GitHub environments
+          Start-Process msiexec.exe -ArgumentList "/i `"$env:TEMP\tightvnc.msi`" /quiet /qn SERVER_REGISTER_AS_SERVICE=1" -Wait
+          
+          Start-Sleep -Seconds 5
+          
+          # Use TightVNC's control utility to completely remove the password requirement
+          $vncExe = "C:\Program Files\TightVNC\tvnserver.exe"
+          Start-Process $vncExe -ArgumentList "-controlpass -setpassword=`"`"" -Wait
+          Start-Process $vncExe -ArgumentList "-controlpass -setcontrolpassword=`"`"" -Wait
+          Start-Process $vncExe -ArgumentList "-controlpass -allowloopback=1" -Wait
+          Start-Process $vncExe -ArgumentList "-controlpass -acceptlocal=1" -Wait
+          
+          # Force a service restart to clear memory caches and apply the wide-open access policy
+          Restart-Service -Name "TightVNC Server" -Force
 
       - name: Download & Force Consumer Build of Opera GX
         run: |
@@ -47,13 +59,8 @@ jobs:
           Expand-Archive -Path "novnc.zip" -DestinationPath "C:\noVNC" -Force
           Copy-Item -Path "C:\noVNC\noVNC-1.5.0\*" -Destination "C:\noVNC" -Recurse -Force
 
-      - name: Initialize Open Access Engine & Generate Unique URL
+      - name: Start Services & Generate Unique Instant URLs
         run: |
-          Write-Host "Forcing an unauthenticated, loopback-friendly TightVNC engine instance..."
-          # Running with -sharing and avoiding the msi service entirely drops the authentication layer
-          Start-Process "C:\Program Files\TightVNC\tvnserver.exe" -ArgumentList "-run", "-sharing"
-          Start-Sleep -Seconds 3
-          
           Write-Host "Launching Native Python Web Bridge..."
           Start-Process python -ArgumentList "-m websockify 8080 localhost:5900 --web C:\noVNC"
           
@@ -77,7 +84,7 @@ jobs:
               Write-Host "      WEB-BROWSER CLOUD PC IS READY TO CONNECT      "
               Write-Host "===================================================="
               Write-Host " CLICK LINK: $FinalUrl"
-              Write-Host " SECURITY  : Authentication bypassed. Click Connect to access."
+              Write-Host " SECURITY  : Password disabled. Click 'Connect' to log in."
               Write-Host "===================================================="
           } else {
               Write-Error "CRITICAL: Dynamic gateway assignment timed out."
