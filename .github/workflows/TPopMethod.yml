@@ -70,7 +70,7 @@ jobs:
           Write-Host "Launching Native Python Web Bridge..."
           Start-Process python -ArgumentList "-m websockify 8080 localhost:5900 --web C:\noVNC"
           
-          Verify port 8080 handshake
+          # Verify port 8080 handshake
           $retries = 0
           while (-not (Test-NetConnection -ComputerName 127.0.0.1 -Port 8080).TcpTestSucceeded -and $retries -lt 15) {
               Start-Sleep -Seconds 2
