@@ -26,57 +26,58 @@ jobs:
       RDP_PASS: "Pass1234"
 
     steps:
-      - name: Verify Required GitHub Secrets Are Set
-        run: |
-          $missingSecrets = @()
-          if (-not "${{ secrets.AUTH }}")  { $missingSecrets += "AUTH" }
-          if (-not "${{ secrets.API }}")   { $missingSecrets += "API" }
-          if (-not "${{ secrets.EMAIL }}") { $missingSecrets += "EMAIL" }
-
-          if ($missingSecrets.Count -gt 0) {
-              Write-Error "CRITICAL ERROR: The following required GitHub Secrets are missing or empty: ($($missingSecrets -join ', '))."
-              exit 1
-          }
-          Write-Host "All required secrets validated successfully."
-
       - name: Wipe Unnecessary Pre-Installed GitHub Apps & Shortcuts
         run: |
           $publicDesktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
-          $userDesktop = "$env:USERPROFILE\Desktop"
           $targets = @("Unity Hub.lnk", "R 4.6.0.lnk", "Firefox.lnk", "Google Chrome.lnk", "Claim Rewards Here.lnk")
-          foreach ($target in $targets) { 
-              if (Test-Path "$publicDesktop\$target") { Remove-Item "$publicDesktop\$target" -Force -ErrorAction SilentlyContinue }
-              if (Test-Path "$userDesktop\$target") { Remove-Item "$userDesktop\$target" -Force -ErrorAction SilentlyContinue }
+          foreach ($target in $targets) { Remove-Item "$publicDesktop\$target" -Force -ErrorAction SilentlyContinue }
+
+      - name: Provision RDP User Identity & Force Profile Creation
+        run: |
+          Rename-Computer -NewName "pc" -Force -ErrorAction SilentlyContinue
+          
+          $u = $env:RDP_USER
+          $sec = ConvertTo-SecureString $env:RDP_PASS -AsPlainText -Force
+          
+          # 1. Create user and assign full administrator privileges
+          if (-not (Get-LocalUser -Name $u -EA SilentlyContinue)) {
+            New-LocalUser -Name $u -Password $sec -AccountNeverExpires
+            Add-LocalGroupMember -Group "Administrators" -Member $u
+            Add-LocalGroupMember -Group "Remote Desktop Users" -Member $u
+          } else {
+            Set-LocalUser -Name $u -Password $sec -AccountNeverExpires
+            Enable-LocalUser -Name $u
+          }
+          
+          # 2. FIX: Force Windows to completely generate C:\Users\user directory structure immediately
+          Write-Host "Pre-initializing user environment profile..."
+          $sid = (Get-LocalUser -Name $u).SID.Value
+          $userProfilePath = "C:\Users\$u"
+          if (-not (Test-Path $userProfilePath)) {
+              New-Item -ItemType Directory -Path $userProfilePath -Force | Out-Null
+              # Register profile mapping layout in Windows Registry so system recognizes it on connect
+              $regPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid"
+              New-Item -Path $regPath -Force | Out-Null
+              New-ItemProperty -Path $regPath -Name "ProfileImagePath" -PropertyType String -Value $userProfilePath -Force | Out-Null
           }
 
-      - name: Optimize Resolution & Force UI Automation Layers
-        run: |
-          Set-DisplayResolution -Width 1600 -Height 1200 -Force -ErrorAction SilentlyContinue
-          
-          # Force Windows to allow UI Automation over remote layers
-          New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableUIADesktopToggle" -PropertyType DWord -Value 1 -Force -ErrorAction SilentlyContinue
-          
-          # Unblock Touch Remote restrictions in Remote Desktop Services
-          $tsPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations"
-          New-ItemProperty -Path $tsPath -Name "TouchMode" -PropertyType DWord -Value 1 -Force -ErrorAction SilentlyContinue
-          New-ItemProperty -Path $tsPath -Name "EnableTouchInjection" -PropertyType DWord -Value 1 -Force -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 3
+          Set-ItemProperty "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name fDenyTSConnections -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop" | Out-Null
 
-      - name: Download & Force Consumer Build of Opera GX
+      - name: Download & Force Consumer Build of Opera GX (Urban VPN Integration)
         run: |
           Write-Host "Fetching consumer-stable Opera GX Core..."
           $url = "https://net.geo.opera.com/opera_gx/stable/windows?utm_source=inf&utm_medium=gx"
           $installer = "$env:TEMP\OperaGXSetup.exe"
           Invoke-WebRequest -Uri $url -OutFile $installer
           
-          # 1. Install browser silently
+          # Install browser silently
           Start-Process -FilePath $installer -ArgumentList "--silent=1", "--allusers=1", "--launchbrowser=0", "--desktopshortcut=1" -Wait
 
           $operaExe = "$env:ProgramFiles\Opera GX\opera.exe"
           if (-not (Test-Path $operaExe)) { $operaExe = "$env:ProgramFiles (x86)\Opera GX\opera.exe" }
 
-          # 2. Workspace initialization profile launch
-          Write-Host "Launching clean engine layer to initialize workspace profiles..."
+          # Launch to initialize workspace files
           Start-Process -FilePath $operaExe -ArgumentList "--no-first-run"
           
           $profileDir = "$env:APPDATA\Opera Software\Opera GX Stable\Default"
@@ -84,76 +85,52 @@ jobs:
           $backupPath = "$profileDir\Preferences.backup"
           
           for ($i = 1; $i -le 15; $i++) {
-              if (Test-Path $prefPath) {
-                  Write-Host "Pristine Preferences structure caught early on iteration $i!"
-                  break
-              }
+              if (Test-Path $prefPath) { break }
               Start-Sleep -Seconds 2
           }
 
-          # 3. Force stop browser to release file handles entirely
-          Write-Host "Halting engine layer..."
           Stop-Process -Name "opera" -Force -ErrorAction SilentlyContinue
-          Start-Sleep -Seconds 8
+          Start-Sleep -Seconds 5
 
-          # 4. Target profile configurations
+          # Inject baseline layout variables
           if (Test-Path $prefPath) {
-              Write-Host "Natively generated Preferences found. Merging UI settings..."
               $configHashtable = Get-Content $prefPath -Raw | ConvertFrom-Json -AsHashtable
               if ($null -eq $configHashtable) { $configHashtable = @{} }
-
               if (-not $configHashtable.ContainsKey('ui')) { $configHashtable['ui'] = @{} }
               if (-not $configHashtable['ui'].ContainsKey('browser')) { $configHashtable['ui']['browser'] = @{} }
               if (-not $configHashtable['ui'].ContainsKey('sidebar')) { $configHashtable['ui']['browser']['sidebar'] = @{} }
               
-              $configHashtable['ui']['browser']['sidebar']['item_prefs'] = @{
-                  "visibility" = @{ "GxRewards" = $true }
-              }
-              
-              $configHashtable['ui']['browser']['sidebar']['GxRewards'] = @{
-                  "last_action_time" = "13426206569601273"
-                  "last_used_ts" = "13426206569603970"
-                  "notification_type" = "1"
-              }
-
+              $configHashtable['ui']['browser']['sidebar']['item_prefs'] = @{ "visibility" = @{ "GxRewards" = $true } }
+              $configHashtable['ui']['browser']['sidebar']['GxRewards'] = @{ "last_action_time" = "13426206569601273"; "notification_type" = "1" }
               $configHashtable['ui']['visibility'] = @{ "GxRewards" = $true }
 
               $finalJson = $configHashtable | ConvertTo-Json -Depth 100 -Compress
-              Remove-Item $prefPath -Force -ErrorAction SilentlyContinue
-              Remove-Item $backupPath -Force -ErrorAction SilentlyContinue
               Set-Content -Path $prefPath -Value $finalJson -Force
               Set-Content -Path $backupPath -Value $finalJson -Force
+              
+              # Copy configurations directly into our newly generated custom user directory profile path
+              $targetUserAppData = "C:\Users\user\AppData\Roaming\Opera Software\Opera GX Stable\Default"
+              New-Item -ItemType Directory -Path $targetUserAppData -Force | Out-Null
+              Copy-Item -Path $prefPath -Destination "$targetUserAppData\Preferences" -Force
+              Copy-Item -Path $backupPath -Destination "$targetUserAppData\Preferences.backup" -Force
           }
 
+          # Setup Launcher link targeting Urban VPN Google Chrome Webstore directly
           $publicDesktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
-          $userDesktop = "$env:USERPROFILE\Desktop"
-          if (Test-Path "$userDesktop\Opera GX.lnk") {
-              Move-Item -Path "$userDesktop\Opera GX.lnk" -Destination $publicDesktop -Force -ErrorAction SilentlyContinue
-          }
-
-          # 5. STEALTH AGENT PREP: Purging explicit system identifiers
-          Write-Host "Purging execution environment variables..."
-          $targetVars = @("GITHUB_ACTIONS", "GITHUB_RUN_ID", "GITHUB_REPOSITORY", "GITHUB_ACTOR", "RUNNER_NAME", "RUNNER_TRACKER")
-          foreach ($var in $targetVars) {
-              [Environment]::SetEnvironmentVariable($var, $null, "Process")
-          }
-
-          # Define targeted execution arguments loading the Urban VPN store page directly
           $targetUrl = "https://chromewebstore.google.com/detail/urban-vpn-proxy/eppiocemhmnlbhjplcgkofciiegomcon"
           $stealthArgs = "`"$targetUrl`" --no-first-run --disable-blink-features=AutomationControlled --disable-infobars --password-store=basic"
 
-          Write-Host "Configuring explicit launcher shortcut targeting Urban VPN..."
           $WshShell = New-Object -ComObject WScript.Shell
           $Shortcut = $WshShell.CreateShortcut("$publicDesktop\Opera GX Browser.lnk")
           $Shortcut.TargetPath = $operaExe
           $Shortcut.Arguments = $stealthArgs
           $Shortcut.Save()
-          Start-Sleep -Seconds 5
 
-          Write-Host "Opening pristine workspace instance..."
+          # Clear tracking environment variables
+          $targetVars = @("GITHUB_ACTIONS", "GITHUB_RUN_ID", "GITHUB_REPOSITORY", "GITHUB_ACTOR", "RUNNER_NAME", "RUNNER_TRACKER")
+          foreach ($var in $targetVars) { [Environment]::SetEnvironmentVariable($var, $null, "Process") }
+
           Start-Process -FilePath $operaExe -ArgumentList $stealthArgs
-          Write-Host "Sequence finished. Workspace deployed smoothly with a single Urban VPN extension window active."
-          Start-Sleep -Seconds 10
 
       - name: Parse Runtime Requirements
         run: |
@@ -176,8 +153,6 @@ jobs:
           } catch {}
 
       - name: Install & Authenticate Tailscale Network
-        env:
-          TS_AUTHKEY: ${{ secrets.AUTH }}
         run: |
           $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
           if (-not (Test-Path $ts)) {
@@ -188,47 +163,9 @@ jobs:
             Remove-Item $dst -Force
           }
           & $ts logout | Out-Null
-          
-          Write-Host "Registering persistent tunnel layers..."
-          & $ts up --authkey "$env:TS_AUTHKEY" --hostname "pc" --accept-dns=true --accept-routes=true
-          
+          & $ts up --authkey "${{ secrets.AUTH }}" --hostname "pc" --accept-dns=true --accept-routes=true
           $ip4 = & $ts ip -4 | Select-Object -First 1
           Write-Host "Tailscale Dedicated Node IP: $ip4"
-
-      - name: Provision RDP User Identity & Global System Rules
-        run: |
-          Rename-Computer -NewName "pc" -Force -ErrorAction SilentlyContinue
-          
-          $u = $env:RDP_USER
-          $sec = ConvertTo-SecureString $env:RDP_PASS -AsPlainText -Force
-          
-          # 1. Create the 'user' account with full Administrative powers
-          if (-not (Get-LocalUser -Name $u -EA SilentlyContinue)) {
-            New-LocalUser -Name $u -Password $sec -AccountNeverExpires
-          } else {
-            Set-LocalUser -Name $u -Password $sec -AccountNeverExpires
-            Enable-LocalUser -Name $u
-          }
-          
-          Add-LocalGroupMember -Group "Administrators" -Member $u -ErrorAction SilentlyContinue
-          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $u -ErrorAction SilentlyContinue
-          
-          # 2. PROFILE MIRROR SYNC: Force-inject Opera workspace settings into the 'user' account profile path
-          Write-Host "Syncing browser configuration templates to the custom user space..."
-          $targetUserAppData = "C:\Users\$u\AppData\Roaming\Opera Software\Opera GX Stable\Default"
-          if (-not (Test-Path $targetUserAppData)) { 
-              New-Item -ItemType Directory -Path $targetUserAppData -Force | Out-Null 
-          }
-          
-          $runnerDefaultPref = "$env:APPDATA\Opera Software\Opera GX Stable\Default\Preferences"
-          if (Test-Path $runnerDefaultPref) {
-              Copy-Item -Path $runnerDefaultPref -Destination "$targetUserAppData\Preferences" -Force -ErrorAction SilentlyContinue
-              Copy-Item -Path $runnerDefaultPref -Destination "$targetUserAppData\Preferences.backup" -Force -ErrorAction SilentlyContinue
-          }
-
-          # Enable RDP engine channels globally
-          Set-ItemProperty "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name fDenyTSConnections -Value 0
-          Enable-NetFirewallRule -DisplayGroup "Remote Desktop" | Out-Null
 
       - name: Structural Window Minimization
         run: |
